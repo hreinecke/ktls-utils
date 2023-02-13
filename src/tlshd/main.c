@@ -147,8 +147,15 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
+	if (tlshd_link_keyring() < 0) {
+		tlshd_log_shutdown();
+		tlshd_log_close();
+		return EXIT_FAILURE;
+	}
+
 	tlshd_wait_for_events();
 
+	tlshd_unlink_keyring();
 	tlshd_config_shutdown();
 	tlshd_log_shutdown();
 	tlshd_log_close();
