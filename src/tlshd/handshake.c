@@ -77,8 +77,10 @@ void tlshd_service_socket(void)
 	tlshd_completion_status = -EIO;
 	atexit(tlshd_handshake_complete);
 
-	if (tlshd_nl_get_handshake_parms(&parms) < 0)
+	if (tlshd_nl_get_handshake_parms(&parms) < 0) {
+		tlshd_log_debug("%s: invalid parameters", __func__);
 		return;
+	}
 
 	memset(&tlshd_peeraddr, 0, sizeof(tlshd_peeraddr));
 	tlshd_peeraddr_len = sizeof(tlshd_peeraddr);

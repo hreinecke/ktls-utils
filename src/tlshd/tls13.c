@@ -55,6 +55,8 @@ static void tlshd_start_tls_handshake(gnutls_session_t session,
 		ret = gnutls_priority_set_direct(session, parms->priorities,
 						 &err_pos);
 		if (ret != GNUTLS_E_SUCCESS) {
+			tlshd_log_debug("%s: set priority error %d, pos %s",
+					__func__, ret, err_pos);
 			tlshd_log_gnutls_error(ret);
 			return;
 		}
@@ -72,6 +74,9 @@ static void tlshd_start_tls_handshake(gnutls_session_t session,
 		ret = gnutls_handshake(session);
 	} while (ret < 0 && !gnutls_error_is_fatal(ret));
 	if (ret < 0) {
+		tlshd_log_debug("%s: handshake %d/%d error %d",
+				__func__, parms->handshake_type,
+				parms->auth_type, ret);
 		switch (ret) {
 		case GNUTLS_E_CERTIFICATE_VERIFICATION_ERROR:
 			tlshd_log_cert_verification_error(session);
@@ -438,10 +443,14 @@ static int tlshd_server_psk_cb(__attribute__ ((unused))gnutls_session_t session,
 	key_serial_t psk;
 
 	psk = keyctl_search(KEY_SPEC_SESSION_KEYRING, "psk", username, 0);
-	if (psk < 0)
+	if (psk < 0) {
+		tlshd_log_debug("Key identity %s not found", username);
 		return -1;
-	if (!tlshd_keyring_get_psk_key(psk, key))
+	}
+	if (!tlshd_keyring_get_psk_key(psk, key)) {
+		tlshd_log_debug("failed to load key %x", psk);
 		return -1;
+	}
 	return 0;
 }
 
@@ -457,6 +466,8 @@ static void tlshd_server_psk_handshake(struct tlshd_handshake_parms *parms)
 
 	ret = gnutls_psk_allocate_server_credentials(&psk_cred);
 	if (ret != GNUTLS_E_SUCCESS) {
+		tlshd_log_debug("%s: alloc server credentials error %d",
+				__func__, ret);
 		tlshd_log_gnutls_error(ret);
 		goto out_unlink;
 	}
@@ -466,6 +477,8 @@ static void tlshd_server_psk_handshake(struct tlshd_handshake_parms *parms)
 
 	ret = gnutls_init(&session, GNUTLS_SERVER);
 	if (ret != GNUTLS_E_SUCCESS) {
+		tlshd_log_debug("%s: init session error %d",
+				__func__, ret);
 		tlshd_log_gnutls_error(ret);
 		goto out_free_creds;
 	}
@@ -506,6 +519,8 @@ void tlshd_tls13_handler(struct tlshd_handshake_parms *parms)
 
 	tlshd_log_debug("System config file: %s", gnutls_get_system_config_file());
 
+	tlshd_log_debug("Starting handshake type %d auth %d",
+			parms->handshake_type, parms->auth_type);
 	switch (parms->handshake_type) {
 	case HANDSHAKE_NL_TLS_TYPE_CLIENTHELLO:
 		switch (parms->auth_type) {
