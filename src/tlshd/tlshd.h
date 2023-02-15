@@ -25,8 +25,7 @@ extern int tlshd_library_debug;
 extern int tlshd_stderr;
 extern GKeyFile *tlshd_configuration;
 extern int tlshd_completion_status;
-extern long tlshd_keyring_id;
-extern char *tlshd_keyring;
+extern key_serial_t tlshd_keyring_id;
 
 struct tlshd_handshake_parms {
 	char		*peername;
@@ -39,6 +38,7 @@ struct tlshd_handshake_parms {
 	key_serial_t	x509_cert;
 	key_serial_t	x509_privkey;
 	key_serial_t	peerid;
+	key_serial_t	keyring;
 	int		status;
 };
 
@@ -61,8 +61,9 @@ extern bool tlshd_keyring_get_psk_key(key_serial_t serial,
 extern bool tlshd_keyring_get_privkey(key_serial_t serial,
 				      gnutls_privkey_t privkey);
 extern bool tlshd_keyring_get_cert(key_serial_t serial, gnutls_pcert_st *cert);
-extern int tlshd_link_keyring(void);
-extern void tlshd_unlink_keyring(void);
+extern key_serial_t tlshd_lookup_keyring(const char *keyring);
+extern int tlshd_link_keyring(key_serial_t keyring_id);
+extern void tlshd_unlink_keyring(key_serial_t keyring_id);
 
 /* ktls.c */
 extern int tlshd_initialize_ktls(gnutls_session_t session);
@@ -141,6 +142,7 @@ enum handshake_nl_attrs {
 	HANDSHAKE_NL_ATTR_TLS_SESS_STATUS,
 	HANDSHAKE_NL_ATTR_TLS_PEERID,
 	HANDSHAKE_NL_ATTR_TLS_TIMEOUT,
+	HANDSHAKE_NL_ATTR_TLS_KEYRING,
 
 	__HANDSHAKE_NL_ATTR_MAX
 };
@@ -176,6 +178,7 @@ enum {
 	HANDSHAKE_NO_PEERID = 0,
 	HANDSHAKE_NO_CERT = 0,
 	HANDSHAKE_NO_PRIVKEY = 0,
+	HANDSHAKE_NO_KEYRING = 0,
 };
 
 enum handshake_nl_tls_session_status {

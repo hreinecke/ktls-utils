@@ -98,6 +98,9 @@ static int tlshd_nl_valid_handler(struct nl_msg *msg, void *arg)
 	parms->timeout = GNUTLS_DEFAULT_HANDSHAKE_TIMEOUT;
 	if (tb[HANDSHAKE_NL_ATTR_TLS_TIMEOUT])
 		parms->timeout = nla_get_u32(tb[HANDSHAKE_NL_ATTR_TLS_TIMEOUT]) * 1000;
+	parms->keyring = HANDSHAKE_NO_KEYRING;
+	if (tb[HANDSHAKE_NL_ATTR_TLS_KEYRING])
+		parms->keyring = nla_get_u32(tb[HANDSHAKE_NL_ATTR_TLS_KEYRING]);
 
 	return NL_SKIP;
 }

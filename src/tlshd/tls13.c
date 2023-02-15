@@ -381,7 +381,7 @@ static int tlshd_certificate_verify_function(gnutls_session_t session)
 	return 0;
 }
 
-static void tlshd_server_handshake(struct tlshd_handshake_parms *parms)
+static void tlshd_server_x509_handshake(struct tlshd_handshake_parms *parms)
 {
 	gnutls_certificate_credentials_t xcred;
 	gnutls_session_t session;
@@ -428,6 +428,58 @@ out_free_creds:
 	gnutls_certificate_free_credentials(xcred);
 }
 
+static int tlshd_server_psk_cb(__attribute__ ((unused))gnutls_session_t session,
+			       const char *username, gnutls_datum_t *key)
+{
+	key_serial_t psk;
+
+	psk = keyctl_search(KEY_SPEC_SESSION_KEYRING, "psk", username, 0);
+	if (psk < 0)
+		return -1;
+	if (!tlshd_keyring_get_psk_key(psk, key))
+		return -1;
+	return 0;
+}
+
+static void tlshd_server_psk_handshake(struct tlshd_handshake_parms *parms)
+{
+	gnutls_psk_server_credentials_t psk_cred;
+	gnutls_session_t session;
+	int ret;
+
+	if (parms->keyring != HANDSHAKE_NO_KEYRING)
+		if (tlshd_link_keyring(parms->keyring) < 0)
+			parms->keyring = HANDSHAKE_NO_KEYRING;
+
+	ret = gnutls_psk_allocate_server_credentials(&psk_cred);
+	if (ret != GNUTLS_E_SUCCESS) {
+		tlshd_log_gnutls_error(ret);
+		goto out_unlink;
+	}
+
+	gnutls_psk_set_server_credentials_function(psk_cred,
+						   tlshd_server_psk_cb);
+
+	ret = gnutls_init(&session, GNUTLS_SERVER);
+	if (ret != GNUTLS_E_SUCCESS) {
+		tlshd_log_gnutls_error(ret);
+		goto out_free_creds;
+	}
+	gnutls_transport_set_int(session, parms->sockfd);
+
+	gnutls_credentials_set(session, GNUTLS_CRD_PSK, psk_cred);
+
+	tlshd_start_tls_handshake(session, parms);
+
+	gnutls_deinit(session);
+
+out_free_creds:
+	gnutls_psk_free_server_credentials(psk_cred);
+out_unlink:
+	if (parms->keyring != HANDSHAKE_NO_KEYRING)
+		tlshd_unlink_keyring(parms->keyring);
+}
+
 /**
  * tlshd_tls13_handler - process a TLS v1.3 handshake request
  * @parms: requested handshake parameters
@@ -468,7 +520,17 @@ void tlshd_tls13_handler(struct tlshd_handshake_parms *parms)
 		}
 		break;
 	case HANDSHAKE_NL_TLS_TYPE_SERVERHELLO:
-		tlshd_server_handshake(parms);
+		switch (parms->auth_type) {
+		case HANDSHAKE_NL_TLS_AUTH_X509:
+			tlshd_server_x509_handshake(parms);
+			break;
+		case HANDSHAKE_NL_TLS_AUTH_PSK:
+			tlshd_server_psk_handshake(parms);
+			break;
+		default:
+			tlshd_log_debug("Unrecognized auth type (%d)",
+					parms->auth_type);
+		}
 		break;
 	default:
 		tlshd_log_debug("Unrecognized handshake type (%d)",

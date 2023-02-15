@@ -38,7 +38,7 @@
 
 #include "tlshd.h"
 
-long tlshd_keyring_id;
+long tlshd_keyring;
 
 /**
  * tlshd_keyring_get_psk_username - Retrieve username for PSK handshake
@@ -196,17 +196,14 @@ bool tlshd_keyring_get_cert(key_serial_t serial, gnutls_pcert_st *cert)
 	return true;
 }
 
-int tlshd_link_keyring(void)
+key_serial_t tlshd_lookup_keyring(const char *keyring)
 {
 	long keyring_id = 0;
 	char buf[1024];
 	char *eptr = NULL;
-	int ret;
 
-	if (!tlshd_keyring)
-		return 0;
-	keyring_id = strtol(tlshd_keyring, &eptr, 0);
-	if (tlshd_keyring == eptr) {
+	keyring_id = strtol(keyring, &eptr, 0);
+	if (keyring == eptr) {
 		FILE *fp;
 		char typebuf[256];
 		int ndesc, n, id;
@@ -215,8 +212,9 @@ int tlshd_link_keyring(void)
 		if (!fp) {
 			tlshd_log_perror("open");
 			tlshd_log_error("Failed to open '/proc/keys'\n");
-			return -1;
+			return 0;
 		}
+		keyring_id = 0;
 		while (fgets(buf, sizeof(buf), fp)) {
 			char *cp = strchr(buf, '\n');
 			if (!cp)
@@ -225,8 +223,7 @@ int tlshd_link_keyring(void)
 				   &id, typebuf, &ndesc);
 			if (n != 2)
 				continue;
-			if (!strncmp(tlshd_keyring, typebuf,
-				     strlen(tlshd_keyring))) {
+			if (!strncmp(keyring, typebuf, strlen(keyring))) {
 				keyring_id = id;
 				break;
 			}
@@ -234,30 +231,43 @@ int tlshd_link_keyring(void)
 		fclose(fp);
 		if (!keyring_id) {
 			tlshd_log_error("Failed to convert keyring number");
-			return -1;
+			return 0;
 		}
+	}
+	return keyring_id;
+}
+
+int tlshd_link_keyring(key_serial_t keyring_id)
+{
+	char buf[1024];
+	int ret;
+
+	if (keyring_id == 0)
+		keyring_id = tlshd_lookup_keyring("psk");
+	if (keyring_id == 0) {
+		tlshd_log_error("No keyring specified");
+		return 0;
 	}
 	ret = keyctl_describe(keyring_id, buf, sizeof(buf));
 	if (ret < 0) {
-		tlshd_log_debug("Failed to lookup keyring %s (%lx) error %d\n",
-				tlshd_keyring, keyring_id, errno);
+		tlshd_log_debug("Failed to lookup keyring %lx error %d\n",
+				keyring_id, errno);
 		errno = -ENOKEY;
 		return -1;
 	}
 	ret = keyctl_link(keyring_id, KEY_SPEC_SESSION_KEYRING);
 	if (ret < 0) {
 		tlshd_log_debug("Failed to link keyring %s (%lx) error %d\n",
-				tlshd_keyring, keyring_id, errno);
+				buf, keyring_id, errno);
 		return -1;
 	}
 	tlshd_log_debug("Using keyring '%s'\n", buf);
-	tlshd_keyring_id = keyring_id;
+	tlshd_keyring = keyring_id;
 	return 0;
 }
 
-void tlshd_unlink_keyring(void)
+void tlshd_unlink_keyring(key_serial_t keyring_id)
 {
-	if (tlshd_keyring_id)
-		keyctl_unlink(tlshd_keyring_id, KEY_SPEC_THREAD_KEYRING);
-	tlshd_keyring_id = 0;
+	if (keyring_id)
+		keyctl_unlink(keyring_id, KEY_SPEC_THREAD_KEYRING);
 }
