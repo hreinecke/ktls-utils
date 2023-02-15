@@ -269,17 +269,24 @@ void tlshd_nl_done(struct tlshd_handshake_parms *parms)
 		goto out_free;
 	}
 
-	/* To do */
+	err = nla_put_u32(msg, HANDSHAKE_NL_ATTR_TLS_TYPE,
+			  parms->handshake_type);
+	if (err < 0) {
+		tlshd_log_nl_error("nla_put handshake type", err);
+		nla_nest_cancel(msg, args);
+		goto out_free;
+	}
+
 	err = nla_put_u32(msg, HANDSHAKE_NL_ATTR_TLS_AUTH,
-			  HANDSHAKE_NL_TLS_AUTH_UNAUTH);
+			  parms->auth_type);
 	if (err < 0) {
 		tlshd_log_nl_error("nla_put authtype", err);
 		nla_nest_cancel(msg, args);
 		goto out_free;
 	}
-	/* To do */
+
 	err = nla_put_u32(msg, HANDSHAKE_NL_ATTR_TLS_PEERID,
-			  HANDSHAKE_NO_PEERID);
+			  parms->peerid);
 	if (err < 0) {
 		tlshd_log_nl_error("nla_put peer id", err);
 		nla_nest_cancel(msg, args);
