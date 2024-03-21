@@ -345,8 +345,8 @@ static char *tlshd_cipher_string_emit(char *pstring, unsigned int cipher)
 	return pstring;
 }
 
-static gnutls_priority_t	tlshd_gnutls_priority_x509;
-static gnutls_priority_t	tlshd_gnutls_priority_psk;
+static char			*tlshd_priority_string;
+static gnutls_priority_t	tlshd_gnutls_priority;
 
 /**
  * tlshd_gnutls_priority_init - Initialize GnuTLS priority caches
@@ -399,66 +399,8 @@ int tlshd_gnutls_priority_init(void)
 			return -ENOMEM;
 	}
 
-	tlshd_log_debug("x.509 priority string: %s\n", pstring);
-
-	ret = gnutls_priority_init(&tlshd_gnutls_priority_x509, pstring, &errpos);
-	if (ret != GNUTLS_E_SUCCESS) {
-		free(pstring);
-		tlshd_log_gnutls_error(ret);
-		return -EIO;
-	}
-
-	pstring = tlshd_string_concat(pstring, ":+PSK:+DHE-PSK:+ECDHE-PSK");
-	if (!pstring) {
-		gnutls_priority_deinit(tlshd_gnutls_priority_x509);
-		return -ENOMEM;
-	}
-
-	tlshd_log_debug("PSK priority string: %s\n", pstring);
-
-	ret = gnutls_priority_init(&tlshd_gnutls_priority_psk, pstring, &errpos);
-	if (ret != GNUTLS_E_SUCCESS) {
-		free(pstring);
-		gnutls_priority_deinit(tlshd_gnutls_priority_x509);
-		tlshd_log_gnutls_error(ret);
-		return -EIO;
-	}
-
-	free(pstring);
+	tlshd_priority_string = pstring;
 	return 0;
-}
-
-/**
- * tlshd_gnutls_priority_restrict - Disable specific hash functions
- * @session: session to initialize
- * @key_size: length of the selected PSK
- *
- * Restrict the set of hash functions to those matching the current
- * PSK key length.
- *
- * Note: this is function actually does the reverse by disabling
- * the non-matchine SHA functions.
- *
- * Returns GNUTLS_E_SUCCESS on success, otherwise an error code.
- */
-int tlshd_gnutls_priority_restrict(gnutls_session_t session,
-				   unsigned int key_size)
-{
-	const char *err;
-	int ret;
-
-	if (key_size == 32)
-		ret = gnutls_set_default_priority_append(session,
-							 "-SHA384",
-							 &err, 0);
-	else if (key_size == 48)
-		ret = gnutls_set_default_priority_append(session,
-							 "-SHA256",
-							 &err, 0);
-	else
-		ret = GNUTLS_E_UNIMPLEMENTED_FEATURE;
-
-	return ret;
 }
 
 /**
@@ -468,10 +410,47 @@ int tlshd_gnutls_priority_restrict(gnutls_session_t session,
  *
  * Returns GNUTLS_E_SUCCESS on success, otherwise an error code.
  */
-int tlshd_gnutls_priority_set(gnutls_session_t session, struct tlshd_handshake_parms *parms)
+int tlshd_gnutls_priority_set(gnutls_session_t session,
+			      struct tlshd_handshake_parms *parms)
 {
-	return gnutls_priority_set(session, parms->auth_mode == HANDSHAKE_AUTH_PSK ?
-					    tlshd_gnutls_priority_psk : tlshd_gnutls_priority_x509);
+	int ret;
+	const char *errpos;
+	char *pstring = tlshd_priority_string;
+
+	if (!pstring) {
+		tlshd_log_error("No GNUTLS priority string\n");
+		return -EIO;
+	}
+	if (parms->auth_mode == HANDSHAKE_AUTH_X509) {
+		tlshd_log_debug("x.509 priority string: %s\n", pstring);
+	} else if (parms->auth_mode == HANDSHAKE_AUTH_PSK) {
+		pstring = tlshd_string_concat(pstring,
+					      ":+PSK:+DHE-PSK:+ECDHE-PSK");
+		if (!pstring) {
+			tlshd_log_gnutls_error(GNUTLS_E_MEMORY_ERROR);
+			return -ENOMEM;
+		}
+
+		if (parms->psk_len == 32)
+			pstring = tlshd_string_concat(pstring, ":-SHA384");
+		else if (parms->psk_len == 48)
+			pstring = tlshd_string_concat(pstring, ":-SHA256");
+		if (!pstring) {
+			tlshd_log_gnutls_error(GNUTLS_E_MEMORY_ERROR);
+			return -ENOMEM;
+		}
+		tlshd_log_debug("PSK priority string: %s\n", pstring);
+	}
+	ret = gnutls_priority_init(&tlshd_gnutls_priority,
+				   pstring, &errpos);
+	if (ret != GNUTLS_E_SUCCESS) {
+		free(pstring);
+		tlshd_log_gnutls_error(ret);
+		return -EIO;
+	}
+	free(pstring);
+	tlshd_priority_string = NULL;
+	return gnutls_priority_set(session, tlshd_gnutls_priority);
 }
 
 /**
@@ -480,6 +459,5 @@ int tlshd_gnutls_priority_set(gnutls_session_t session, struct tlshd_handshake_p
  */
 void tlshd_gnutls_priority_deinit(void)
 {
-	gnutls_priority_deinit(tlshd_gnutls_priority_x509);
-	gnutls_priority_deinit(tlshd_gnutls_priority_psk);
+	gnutls_priority_deinit(tlshd_gnutls_priority);
 }

@@ -365,6 +365,7 @@ static void tlshd_client_psk_handshake_one(struct tlshd_handshake_parms *parms,
 		tlshd_log_gnutls_error(ret);
 		goto out_free_creds;
 	}
+	parms->psk_len = key.size;
 
 	flags = GNUTLS_CLIENT;
 	ret = gnutls_init(&session, flags);
@@ -377,12 +378,6 @@ static void tlshd_client_psk_handshake_one(struct tlshd_handshake_parms *parms,
 	gnutls_credentials_set(session, GNUTLS_CRD_PSK, psk_cred);
 
 	ret = tlshd_gnutls_priority_set(session, parms);
-	if (ret != GNUTLS_E_SUCCESS) {
-		tlshd_log_gnutls_error(ret);
-		goto out_free_creds;
-	}
-
-	ret = tlshd_gnutls_priority_restrict(session, key.size);
 	if (ret != GNUTLS_E_SUCCESS) {
 		tlshd_log_gnutls_error(ret);
 		goto out_free_creds;
