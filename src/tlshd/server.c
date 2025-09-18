@@ -64,9 +64,10 @@ static int tlshd_server_secret_func(gnutls_session_t session,
 	if (level != GNUTLS_ENCRYPTION_LEVEL_APPLICATION)
 		return 0;
 
+	parms->session_id = g_rand_int(rand);
 	if (secret_read) {
 		key_name = g_strdup_printf("tlshd:server-session-read-%d",
-				   g_rand_int(rand));
+					   parms->session_id);
 		serial = add_key("user", key_name, secret_read, secret_size,
 				 parms->keyring);
 		g_free(key_name);
@@ -80,7 +81,7 @@ static int tlshd_server_secret_func(gnutls_session_t session,
 	}
 	if (secret_write) {
 		key_name = g_strdup_printf("tlshd:server-session-write-%d",
-				   g_rand_int(rand));
+					   parms->session_id);
 		serial = add_key("user", key_name, secret_write, secret_size,
 				 parms->keyring);
 		g_free(key_name);

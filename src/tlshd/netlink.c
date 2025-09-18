@@ -538,6 +538,15 @@ void tlshd_genl_done(struct tlshd_handshake_parms *parms)
 		goto out_free;
 	}
 
+	if (parms->session_id) {
+		err = nla_put_u32(msg, HANDSHAKE_A_DONE_SESSION_ID,
+				  parms->session_id);
+		if (err) {
+			tlshd_log_nl_error("nla_put sessino_id", err);
+			goto out_free;
+		}
+	}
+
 	err = nla_put_s32(msg, HANDSHAKE_A_DONE_SOCKFD, parms->sockfd);
 	if (err < 0) {
 		tlshd_log_nl_error("nla_put sockfd", err);

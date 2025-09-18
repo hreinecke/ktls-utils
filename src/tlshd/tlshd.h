@@ -42,6 +42,7 @@ struct tlshd_handshake_parms {
 	GArray		*remote_peerids;
 
 	unsigned int	session_status;
+	unsigned int	session_id;
 };
 
 enum peer_type {
