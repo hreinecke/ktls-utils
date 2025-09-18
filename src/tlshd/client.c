@@ -74,6 +74,53 @@ static int tlshd_client_get_truststore(gnutls_certificate_credentials_t cred)
 	return GNUTLS_E_SUCCESS;
 }
 
+int tlshd_client_secret_func(gnutls_session_t session,
+			     gnutls_record_encryption_level_t level,
+			     const void *secret_read, const void *secret_write,
+			     size_t secret_size)
+{
+	struct tlshd_handshake_parms *parms = gnutls_session_get_ptr(session);
+	key_serial_t serial;
+	GRand *rand = g_rand_new();
+	gchar *key_name;
+	int ret = 0;
+
+	if (level != GNUTLS_ENCRYPTION_LEVEL_APPLICATION)
+		return 0;
+
+	if (secret_read) {
+		key_name = g_strdup_printf("tlshd:client-session-read-%d",
+				   g_rand_int(rand));
+		serial = add_key("user", key_name, secret_read, secret_size,
+				 parms->keyring);
+		g_free(key_name);
+		if (serial < 0) {
+			tlshd_log_perror("add_key");
+			tlshd_log_error("Failed to save ap read key.");
+			ret = -1;
+			goto out;
+		}
+		tlshd_log_notice("client read ap key %08x\n", serial);
+	}
+	if (secret_write) {
+		key_name = g_strdup_printf("tlshd:client-session-write-%d",
+				   g_rand_int(rand));
+		serial = add_key("user", key_name, secret_write, secret_size,
+				 parms->keyring);
+		g_free(key_name);
+		if (serial < 0) {
+			tlshd_log_perror("add_key");
+			tlshd_log_error("Failed to save ap write key.");
+			ret = -1;
+			goto out;
+		}
+		tlshd_log_notice("client write ap key %08x\n", serial);
+	}
+out:
+	g_rand_free(rand);
+	return ret;
+}
+
 static void tlshd_tls13_client_anon_handshake(struct tlshd_handshake_parms *parms)
 {
 	gnutls_certificate_credentials_t xcred;
@@ -125,6 +172,7 @@ static void tlshd_tls13_client_anon_handshake(struct tlshd_handshake_parms *parm
 	}
 
 	gnutls_session_set_verify_cert(session, parms->peername, 0);
+	gnutls_handshake_set_secret_function(session, tlshd_client_secret_func);
 
 	tlshd_start_tls_handshake(session, parms);
 
@@ -371,6 +419,7 @@ static void tlshd_tls13_client_x509_handshake(struct tlshd_handshake_parms *parm
 	}
 	gnutls_certificate_set_verify_function(xcred,
 					       tlshd_tls13_client_x509_verify_function);
+	gnutls_handshake_set_secret_function(session, tlshd_client_secret_func);
 
 	tlshd_start_tls_handshake(session, parms);
 
@@ -461,8 +510,9 @@ static void tlshd_tls13_client_psk_handshake_one(struct tlshd_handshake_parms *p
 		tlshd_log_gnutls_error(ret);
 		goto out_free_creds;
 	}
-
 	tlshd_log_debug("start ClientHello handshake");
+	gnutls_handshake_set_secret_function(session, tlshd_client_secret_func);
+
 	tlshd_start_tls_handshake(session, parms);
 	if (!parms->session_status)
 		/* PSK uses the same identity for both client and server */
