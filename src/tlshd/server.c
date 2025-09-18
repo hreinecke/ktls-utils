@@ -49,6 +49,54 @@ static unsigned int tlshd_server_certs_len = TLSHD_MAX_CERTS;
 static gnutls_pcert_st tlshd_server_certs[TLSHD_MAX_CERTS];
 static gnutls_pk_algorithm_t tlshd_server_pq_pkalg = GNUTLS_PK_UNKNOWN;
 
+static int tlshd_server_secret_func(gnutls_session_t session,
+				    gnutls_record_encryption_level_t level,
+				    const void *secret_read,
+				    const void *secret_write,
+				    size_t secret_size)
+{
+	struct tlshd_handshake_parms *parms = gnutls_session_get_ptr(session);
+	key_serial_t serial;
+	GRand *rand = g_rand_new();
+	gchar *key_name;
+	int ret = 0;
+
+	if (level != GNUTLS_ENCRYPTION_LEVEL_APPLICATION)
+		return 0;
+
+	if (secret_read) {
+		key_name = g_strdup_printf("tlshd:server-session-read-%d",
+				   g_rand_int(rand));
+		serial = add_key("user", key_name, secret_read, secret_size,
+				 parms->keyring);
+		g_free(key_name);
+		if (serial < 0) {
+			tlshd_log_perror("add_key");
+			tlshd_log_error("Failed to save ap read key.");
+			ret = -1;
+			goto out;
+		}
+		tlshd_log_notice("client read ap key %08x\n", serial);
+	}
+	if (secret_write) {
+		key_name = g_strdup_printf("tlshd:server-session-write-%d",
+				   g_rand_int(rand));
+		serial = add_key("user", key_name, secret_write, secret_size,
+				 parms->keyring);
+		g_free(key_name);
+		if (serial < 0) {
+			tlshd_log_perror("add_key");
+			tlshd_log_error("Failed to save ap write key.");
+			ret = -1;
+			goto out;
+		}
+		tlshd_log_notice("client write ap key %08x\n", serial);
+	}
+out:
+	g_rand_free(rand);
+	return ret;
+}
+
 static bool tlshd_x509_server_get_certs(struct tlshd_handshake_parms *parms)
 {
 	if (parms->x509_cert != TLS_NO_CERT)
@@ -344,6 +392,7 @@ static void tlshd_tls13_server_x509_handshake(struct tlshd_handshake_parms *parm
 	gnutls_certificate_set_verify_function(xcred,
 					       tlshd_tls13_server_x509_verify_function);
 	gnutls_certificate_server_set_request(session, GNUTLS_CERT_REQUEST);
+	gnutls_handshake_set_secret_function(session, tlshd_server_secret_func);
 
 	ret = tlshd_gnutls_priority_set(session, parms, 0);
 	if (ret) {
@@ -455,6 +504,8 @@ static void tlshd_tls13_server_psk_handshake(struct tlshd_handshake_parms *parms
 	gnutls_session_set_ptr(session, parms);
 
 	gnutls_credentials_set(session, GNUTLS_CRD_PSK, psk_cred);
+
+	gnutls_handshake_set_secret_function(session, tlshd_server_secret_func);
 
 	ret = tlshd_gnutls_priority_set(session, parms, 0);
 	if (ret) {
@@ -612,6 +663,7 @@ static int tlshd_quic_server_set_x509_session(struct tlshd_quic_conn *conn)
 		goto err_session;
 	gnutls_handshake_set_hook_function(session, GNUTLS_HANDSHAKE_CLIENT_HELLO,
 					   GNUTLS_HOOK_POST, tlshd_quic_server_alpn_verify);
+	gnutls_handshake_set_secret_function(session, tlshd_server_secret_func);
 	ret = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, cred);
 	if (ret)
 		goto err_session;
