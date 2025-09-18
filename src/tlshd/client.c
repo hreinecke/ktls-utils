@@ -739,3 +739,10 @@ void tlshd_quic_clienthello_handshake(struct tlshd_handshake_parms *parms)
 	parms->session_status = EOPNOTSUPP;
 }
 #endif
+
+void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
+{
+	tlshd_log_debug("Client Keyupdate type %d not implemented\n",
+			parms->key_update_type);
+	parms->session_status = EOPNOTSUPP;
+}

@@ -173,6 +173,30 @@ void tlshd_service_socket(void)
 			parms.session_status = EOPNOTSUPP;
 		}
 		break;
+	case HANDSHAKE_MSG_TYPE_CLIENTKEYUPDATE:
+		tlshd_log_debug("Calling client key update!\n");
+		switch (parms.ip_proto) {
+		case IPPROTO_TCP:
+			tlshd_tls13_client_keyupdate(&parms);
+			break;
+		default:
+			tlshd_log_debug("Unsupported ip_proto (%d)", parms.ip_proto);
+			parms.session_status = EOPNOTSUPP;
+			break;
+		}
+	case HANDSHAKE_MSG_TYPE_SERVERKEYUPDATE:
+		tlshd_log_debug("Calling server key update type %d\n",
+				parms.key_update_type);
+		switch (parms.ip_proto) {
+		case IPPROTO_TCP:
+			tlshd_tls13_server_keyupdate(&parms);
+			break;
+		default:
+			tlshd_log_debug("Unsupported ip_proto (%d)", parms.ip_proto);
+			parms.session_status = EOPNOTSUPP;
+			break;
+		}
+		break;
 	default:
 		tlshd_log_debug("Unrecognized handshake type (%d)",
 				parms.handshake_type);

@@ -35,6 +35,7 @@ struct tlshd_handshake_parms {
 	uint32_t	handshake_type;
 	unsigned int	timeout_ms;
 	uint32_t	auth_mode;
+	uint32_t	key_update_type;
 	key_serial_t	keyring;
 	key_serial_t	x509_cert;
 	key_serial_t	x509_privkey;
@@ -53,6 +54,7 @@ enum peer_type {
 /* client.c */
 extern void tlshd_tls13_clienthello_handshake(struct tlshd_handshake_parms *parms);
 extern void tlshd_quic_clienthello_handshake(struct tlshd_handshake_parms *parms);
+extern void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms);
 
 /* config.c */
 bool tlshd_config_init(const gchar *pathname);
@@ -121,6 +123,7 @@ extern void tlshd_genl_done(struct tlshd_handshake_parms *parms);
 /* server.c */
 extern void tlshd_tls13_serverhello_handshake(struct tlshd_handshake_parms *parms);
 extern void tlshd_quic_serverhello_handshake(struct tlshd_handshake_parms *parms);
+extern void tlshd_tls13_server_keyupdate(struct tlshd_handshake_parms *parms);
 
 #ifdef HAVE_GNUTLS_QUIC
 #include <linux/quic.h>

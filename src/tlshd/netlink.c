@@ -102,6 +102,8 @@ tlshd_accept_nl_policy[HANDSHAKE_A_ACCEPT_MAX + 1] = {
 	[HANDSHAKE_A_ACCEPT_PEER_IDENTITY]	= { .type = NLA_U32, },
 	[HANDSHAKE_A_ACCEPT_CERTIFICATE]	= { .type = NLA_NESTED, },
 	[HANDSHAKE_A_ACCEPT_PEERNAME]		= { .type = NLA_STRING, },
+	[HANDSHAKE_A_ACCEPT_KEY_UPDATE_TYPE]	= { .type = NLA_U32, },
+	[HANDSHAKE_A_ACCEPT_SESSION_ID]		= { .type = NLA_U32, },
 	[HANDSHAKE_A_ACCEPT_KEYRING]		= { .type = NLA_U32, },
 };
 
@@ -334,6 +336,10 @@ static int tlshd_genl_valid_handler(struct nl_msg *msg, void *arg)
 		parms->timeout_ms = nla_get_u32(tb[HANDSHAKE_A_ACCEPT_TIMEOUT]);
 	if (tb[HANDSHAKE_A_ACCEPT_AUTH_MODE])
 		parms->auth_mode = nla_get_u32(tb[HANDSHAKE_A_ACCEPT_AUTH_MODE]);
+	if (tb[HANDSHAKE_A_ACCEPT_KEY_UPDATE_TYPE])
+		parms->key_update_type = nla_get_u32(tb[HANDSHAKE_A_ACCEPT_KEY_UPDATE_TYPE]);
+	if (tb[HANDSHAKE_A_ACCEPT_SESSION_ID])
+		parms->session_id = nla_get_u32(tb[HANDSHAKE_A_ACCEPT_SESSION_ID]);
 
 	if (parms->keyring) {
 		err = keyctl_link(parms->keyring, KEY_SPEC_SESSION_KEYRING);
@@ -376,6 +382,8 @@ static const struct tlshd_handshake_parms tlshd_default_handshake_parms = {
 	.peerids		= NULL,
 	.remote_peerids		= NULL,
 	.session_status		= EIO,
+	.session_id		= 0,
+	.key_update_type	= HANDSHAKE_KEY_UPDATE_TYPE_UNSPEC,
 };
 
 /**
