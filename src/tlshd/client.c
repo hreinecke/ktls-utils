@@ -742,7 +742,50 @@ void tlshd_quic_clienthello_handshake(struct tlshd_handshake_parms *parms)
 
 void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 {
-	tlshd_log_debug("Client Keyupdate type %d not implemented\n",
-			parms->key_update_type);
-	parms->session_status = EOPNOTSUPP;
+	key_serial_t serial = -1;
+	gchar *key_name = NULL;
+	gnutls_datum_t key;
+	int ret;
+	void *data;
+
+	if (!parms->session_id) {
+		tlshd_log_debug("Client Keyupdate %d no session id\n",
+				parms->key_update_type);
+		parms->session_status = EINVAL;
+		return;
+	}
+	if (parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_SEND ||
+	    parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_BOTH) {
+		key_name = g_strdup_printf("tlshd:client-session-write-%d",
+					   parms->session_id);
+		serial = keyctl_search(parms->keyring, "user", key_name,
+				       KEY_SPEC_SESSION_KEYRING);
+	}
+
+	if (parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_RECEIVED ||
+	    parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_BOTH) {
+		key_name = g_strdup_printf("tlshd:client-session-read-%d",
+					   parms->session_id);
+		serial = keyctl_search(parms->keyring, "user", key_name,
+				       KEY_SPEC_SESSION_KEYRING);
+	}
+	if (serial < 0) {
+		tlshd_log_perror("keyctl_search");
+		tlshd_log_error("Failed to fetch key '%s'\n",
+				key_name);
+		parms->session_status = -serial;
+		goto out;
+	}
+	ret = keyctl_read_alloc(serial, &data);
+	if (ret < 0) {
+		tlshd_log_perror("keyctl_read_alloc");
+		tlshd_log_error("Failed to read key 0x%x\n", serial);
+		parms->session_status = ENOKEY;
+		goto out;
+	}
+	key.data = data;
+	key.size = ret;
+out:
+	if (key_name)
+		g_free(key_name);
 }
