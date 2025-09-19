@@ -277,3 +277,23 @@ int tlshd_keyring_link_session(const char *keyring)
 	tlshd_log_debug("Keyring '%s' linked into our session keyring.\n", keyring);
 	return 0;
 }
+
+key_serial_t tlshd_keyring_save_ap_key(key_serial_t keyring, int session_id,
+				       const char *prefix,
+				       const void *secret_data,
+				       size_t secret_size)
+{
+	key_serial_t serial = TLS_NO_PEERID;
+	gchar *key_name;
+	int ret = 0;
+
+	key_name = g_strdup_printf("%s-%08x", prefix, session_id);
+	serial = add_key("user", key_name, secret_data, secret_size, keyring);
+	if (serial < 0) {
+		tlshd_log_perror("add_key");
+		tlshd_log_error("Failed to save ap traffic key '%s'.",
+				key_name);
+	}
+	g_free(key_name);
+	return serial;
+}

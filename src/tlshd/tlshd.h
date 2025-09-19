@@ -85,6 +85,11 @@ extern bool tlshd_keyring_get_certs(key_serial_t serial, gnutls_pcert_st *certs,
 extern key_serial_t tlshd_keyring_create_cert(gnutls_x509_crt_t cert,
 					      const char *peername);
 extern int tlshd_keyring_link_session(const char *keyring);
+extern key_serial_t tlshd_keyring_save_ap_key(key_serial_t keyring,
+					      int session_id,
+					      const char *prefix,
+					      const void *secret_data,
+					      size_t secret_size);
 
 /* ktls.c */
 extern unsigned int tlshd_initialize_ktls(gnutls_session_t session);

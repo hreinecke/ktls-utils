@@ -82,7 +82,6 @@ int tlshd_client_secret_func(gnutls_session_t session,
 	struct tlshd_handshake_parms *parms = gnutls_session_get_ptr(session);
 	key_serial_t serial;
 	GRand *rand = g_rand_new();
-	gchar *key_name;
 	int ret = 0;
 
 	if (level != GNUTLS_ENCRYPTION_LEVEL_APPLICATION)
@@ -90,28 +89,22 @@ int tlshd_client_secret_func(gnutls_session_t session,
 
 	parms->session_id = g_rand_int(rand);
 	if (secret_read) {
-		key_name = g_strdup_printf("tlshd:client-session-read-%d",
-					   parms->session_id);
-		serial = add_key("user", key_name, secret_read, secret_size,
-				 parms->keyring);
-		g_free(key_name);
+		serial = tlshd_keyring_save_ap_key(parms->keyring,
+						   parms->session_id,
+						   "tlshd:client-session-read",
+						   secret_read, secret_size);
 		if (serial < 0) {
-			tlshd_log_perror("add_key");
-			tlshd_log_error("Failed to save ap read key.");
 			ret = -1;
 			goto out;
 		}
 		tlshd_log_notice("client read ap key %08x\n", serial);
 	}
 	if (secret_write) {
-		key_name = g_strdup_printf("tlshd:client-session-write-%d",
-					   parms->session_id);
-		serial = add_key("user", key_name, secret_write, secret_size,
-				 parms->keyring);
-		g_free(key_name);
+		serial = tlshd_keyring_save_ap_key(parms->keyring,
+						   parms->session_id,
+						   "tlshd:client-session-write",
+						   secret_write, secret_size);
 		if (serial < 0) {
-			tlshd_log_perror("add_key");
-			tlshd_log_error("Failed to save ap write key.");
 			ret = -1;
 			goto out;
 		}
