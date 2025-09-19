@@ -86,12 +86,17 @@ extern key_serial_t tlshd_keyring_create_cert(gnutls_x509_crt_t cert,
 					      const char *peername);
 extern int tlshd_keyring_link_session(const char *keyring);
 extern key_serial_t tlshd_keyring_save_ap_key(key_serial_t keyring,
-					      int session_id,
 					      const char *prefix,
-					      const void *secret_data,
-					      size_t secret_size);
+					      int session_id,
+					      gnutls_datum_t *key);
+extern bool tlshd_keyring_get_ap_key(key_serial_t keyring,
+				     char *prefix, int session_id,
+				     gnutls_datum_t *ap_key);
 
 /* ktls.c */
+extern bool tlshd_update_traffic_keys(gnutls_datum_t *ap_key,
+				      gnutls_datum_t *ktls_key,
+				      gnutls_datum_t *ktls_iv);
 extern unsigned int tlshd_initialize_ktls(gnutls_session_t session);
 extern int tlshd_gnutls_priority_init(void);
 extern int tlshd_gnutls_priority_set(gnutls_session_t session,

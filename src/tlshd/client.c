@@ -43,6 +43,9 @@
 #include "tlshd.h"
 #include "netlink.h"
 
+#define CLIENT_AP_READ_KEY "tlshd:client-session-read"
+#define CLIENT_AP_WRITE_KEY "tlshd:client-session-write"
+
 static int tlshd_client_get_truststore(gnutls_certificate_credentials_t cred)
 {
 	char *pathname;
@@ -81,6 +84,9 @@ int tlshd_client_secret_func(gnutls_session_t session,
 {
 	struct tlshd_handshake_parms *parms = gnutls_session_get_ptr(session);
 	key_serial_t serial;
+	gnutls_datum_t ap_key = {
+		.size = secret_size,
+	};
 	GRand *rand = g_rand_new();
 	int ret = 0;
 
@@ -89,10 +95,11 @@ int tlshd_client_secret_func(gnutls_session_t session,
 
 	parms->session_id = g_rand_int(rand);
 	if (secret_read) {
+		ap_key.data = (void *)secret_read;
 		serial = tlshd_keyring_save_ap_key(parms->keyring,
+						   CLIENT_AP_READ_KEY,
 						   parms->session_id,
-						   "tlshd:client-session-read",
-						   secret_read, secret_size);
+						   &ap_key);
 		if (serial < 0) {
 			ret = -1;
 			goto out;
@@ -100,10 +107,11 @@ int tlshd_client_secret_func(gnutls_session_t session,
 		tlshd_log_notice("client read ap key %08x\n", serial);
 	}
 	if (secret_write) {
+		ap_key.data = (void *)secret_read;
 		serial = tlshd_keyring_save_ap_key(parms->keyring,
+						   CLIENT_AP_WRITE_KEY,
 						   parms->session_id,
-						   "tlshd:client-session-write",
-						   secret_write, secret_size);
+						   &ap_key);
 		if (serial < 0) {
 			ret = -1;
 			goto out;
@@ -735,11 +743,9 @@ void tlshd_quic_clienthello_handshake(struct tlshd_handshake_parms *parms)
 
 void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 {
-	key_serial_t serial = -1;
-	gchar *key_name = NULL;
-	gnutls_datum_t key;
+	gnutls_datum_t ap_key, ktls_key, ktls_iv;
+	bool update_send = false, update_recv = false;
 	int ret;
-	void *data;
 
 	if (!parms->session_id) {
 		tlshd_log_debug("Client Keyupdate %d no session id\n",
@@ -747,38 +753,47 @@ void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 		parms->session_status = EINVAL;
 		return;
 	}
-	if (parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_SEND ||
-	    parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_BOTH) {
-		key_name = g_strdup_printf("tlshd:client-session-write-%d",
-					   parms->session_id);
-		serial = keyctl_search(parms->keyring, "user", key_name,
-				       KEY_SPEC_SESSION_KEYRING);
+	switch (parms->handshake_type) {
+	case HANDSHAKE_KEY_UPDATE_TYPE_BOTH:
+		update_send = true;
+		update_recv = true;
+		break;
+	case HANDSHAKE_KEY_UPDATE_TYPE_RECEIVED:
+		update_recv = true;
+		break;
+	case HANDSHAKE_KEY_UPDATE_TYPE_SEND:
+		update_send = true;
+		break;
+	default:
+		tlshd_log_error("Client KeyUpdate invalid handshake type %d\n",
+				parms->handshake_type);
+		parms->session_status = EINVAL;
+		return;
 	}
 
-	if (parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_RECEIVED ||
-	    parms->handshake_type == HANDSHAKE_KEY_UPDATE_TYPE_BOTH) {
-		key_name = g_strdup_printf("tlshd:client-session-read-%d",
-					   parms->session_id);
-		serial = keyctl_search(parms->keyring, "user", key_name,
-				       KEY_SPEC_SESSION_KEYRING);
+	if (update_send) {
+		if (!tlshd_keyring_get_ap_key(parms->keyring, 
+					      CLIENT_AP_WRITE_KEY,
+					      parms->session_id, &ap_key)) {
+			parms->session_status = ENOKEY;
+			return;
+		}
 	}
-	if (serial < 0) {
-		tlshd_log_perror("keyctl_search");
-		tlshd_log_error("Failed to fetch key '%s'\n",
-				key_name);
-		parms->session_status = -serial;
-		goto out;
+	if (update_recv) {
+		if (!tlshd_keyring_get_ap_key(parms->keyring,
+					      CLIENT_AP_READ_KEY,
+					      parms->session_id, &ap_key)) {
+			parms->session_status = ENOKEY;
+			return;
+		}
 	}
-	ret = keyctl_read_alloc(serial, &data);
-	if (ret < 0) {
-		tlshd_log_perror("keyctl_read_alloc");
-		tlshd_log_error("Failed to read key 0x%x\n", serial);
-		parms->session_status = ENOKEY;
-		goto out;
-	}
-	key.data = data;
-	key.size = ret;
-out:
-	if (key_name)
-		g_free(key_name);
+
+	ret = tlshd_update_traffic_keys(&ap_key, &ktls_key, &ktls_iv);
+	parms->session_status = ret < 0 ? -ret : 0;
+#if 0
+	if (update_send)
+		tlshd_ktls_set_iv(&ap_key, 0);
+	if (update_recv)
+		tlshd_ktls_set_iv(&ap_key, 1);
+#endif
 }

@@ -68,6 +68,82 @@ static char *tlshd_string_concat(char *str1, const char *str2)
 	return result;
 }
 
+/* HKDF-Expand-Label(Secret, Label, HashValue, Length) */
+int _tls13_expand_secret(const gnutls_mac_algorithm_t mac, const char *label,
+			 unsigned label_size, const uint8_t *msg,
+			 size_t msg_size, gnutls_datum_t key,
+			 gnutls_datum_t out)
+{
+	uint8_t tmp[256] = "tls13 ";
+	gnutls_buffer_t str = {
+		.data = NULL,
+		.allocd = NULL,
+		.max_length = 0,
+		.size = 0,
+	};
+	gnutls_datum_t info;
+	int ret;
+
+	if (label_size >= sizeof(tmp) - 6)
+		return -EINVAL;
+
+	ret = gnutls_buffer_append_prefix(&str, 16, out->size);
+	if (ret < 0) {
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	memcpy(&tmp[6], label, label_size);
+	ret = gnutls_buffer_append_data_prefix(&str, 8, tmp, label_size + 6);
+	if (ret < 0) {
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	ret = gnutls_buffer_append_data_prefix(&str, 8, msg, msg_size);
+	if (ret < 0) {
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	info.data = str.data;
+	info.size = str.length;
+
+	ret = gnutls_hkdf_expand(mac, &key, &info, out->data);
+	if (ret < 0) {
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	ret = 0;
+cleanup:
+	_gnutls_buffer_clear(&str);
+	return ret;
+}
+
+bool tlshd_update_traffic_keys(gnutls_datum_t *ap_key,
+			       gnutls_datum_t *ktls_key,
+			       gnutls_datum_t *ktls_iv)
+{
+	gnutls_mac_algorithm_t mac;
+
+	ret = _tls13_expand_secret(mac,
+				   "traffic upd", 11, NULL, 0,
+				   ap_key, ap_key->size, ap_key->data);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
+	ret = _tls13_expand_secret(mac, "key", 3, NULL, 0,
+				   ap_key, ktls_key->size, ktls_key->data);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
+	ret = _tls13_expand_secret(mac, "iv", 2, NULL, 0,
+				   ap_key, ktls_iv->size, ktls_iv->data);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+}
+
 #ifdef HAVE_GNUTLS_TRANSPORT_IS_KTLS_ENABLED
 static bool tlshd_is_ktls_enabled(gnutls_session_t session, unsigned read)
 {
