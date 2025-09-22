@@ -94,15 +94,17 @@ extern bool tlshd_keyring_get_ap_key(key_serial_t keyring,
 				     gnutls_datum_t *ap_key);
 
 /* ktls.c */
-extern bool tlshd_update_traffic_keys(gnutls_datum_t *ap_key,
-				      gnutls_datum_t *ktls_key,
-				      gnutls_datum_t *ktls_iv);
+extern int tlshd_update_traffic_keys(gnutls_mac_algorithm_t mac,
+				     gnutls_datum_t *ap_key,
+				     gnutls_datum_t *ktls_key,
+				     gnutls_datum_t *ktls_iv);
 extern unsigned int tlshd_initialize_ktls(gnutls_session_t session);
 extern int tlshd_gnutls_priority_init(void);
 extern int tlshd_gnutls_priority_set(gnutls_session_t session,
 				     const struct tlshd_handshake_parms *parms,
 				     unsigned int psk_len);
 extern void tlshd_gnutls_priority_deinit(void);
+extern gnutls_mac_algorithm_t tlshd_get_crypto_mac(int sock, unsigned read);
 
 /* log.c */
 extern void tlshd_log_init(const char *progname);

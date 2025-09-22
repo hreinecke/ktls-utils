@@ -35,6 +35,12 @@
 #include <gnutls/socket.h>
 #include <gnutls/abstract.h>
 
+extern int gnutls_hkdf_expand_label(gnutls_mac_algorithm_t mac,
+				    const gnutls_datum_t *key,
+				    const gnutls_datum_t *label,
+				    const gnutls_datum_t *context,
+				    void *output, size_t length);
+
 #include <linux/tls.h>
 
 #include <glib.h>
@@ -68,80 +74,53 @@ static char *tlshd_string_concat(char *str1, const char *str2)
 	return result;
 }
 
-/* HKDF-Expand-Label(Secret, Label, HashValue, Length) */
-int _tls13_expand_secret(const gnutls_mac_algorithm_t mac, const char *label,
-			 unsigned label_size, const uint8_t *msg,
-			 size_t msg_size, gnutls_datum_t key,
-			 gnutls_datum_t out)
+int tlshd_update_traffic_keys(gnutls_mac_algorithm_t mac,
+			      gnutls_datum_t *ap_key,
+			      gnutls_datum_t *ktls_key,
+			      gnutls_datum_t *ktls_iv)
 {
-	uint8_t tmp[256] = "tls13 ";
-	gnutls_buffer_t str = {
+	gnutls_datum_t upd_info = {
+		.data = (unsigned char *)"traffic upd",
+		.size = 11,
+	};
+	gnutls_datum_t key_info = {
+		.data = (unsigned char *)"key",
+		.size = 3,
+	};
+	gnutls_datum_t iv_info = {
+		.data = (unsigned char *)"iv",
+		.size = 2,
+	};
+	gnutls_datum_t context = {
 		.data = NULL,
-		.allocd = NULL,
-		.max_length = 0,
 		.size = 0,
 	};
-	gnutls_datum_t info;
 	int ret;
 
-	if (label_size >= sizeof(tmp) - 6)
-		return -EINVAL;
-
-	ret = gnutls_buffer_append_prefix(&str, 16, out->size);
+	ret = gnutls_hkdf_expand_label(mac, ap_key, &upd_info,
+				       &context, ap_key->data,
+				       ap_key->size);
 	if (ret < 0) {
-		gnutls_assert();
-		goto cleanup;
+		tlshd_log_perror("hkdf_expand_label (traffic upd)");
+		return ret;
 	}
 
-	memcpy(&tmp[6], label, label_size);
-	ret = gnutls_buffer_append_data_prefix(&str, 8, tmp, label_size + 6);
+	ret = gnutls_hkdf_expand_label(mac, ap_key, &key_info,
+				       &context, ktls_key->data,
+				       ktls_key->size);
 	if (ret < 0) {
-		gnutls_assert();
-		goto cleanup;
+		tlshd_log_perror("hkdf_expand_label (key)");
+		return ret;
 	}
 
-	ret = gnutls_buffer_append_data_prefix(&str, 8, msg, msg_size);
+	ret = gnutls_hkdf_expand_label(mac, ap_key, &iv_info,
+				       &context, ktls_iv->data,
+				       ktls_iv->size);
 	if (ret < 0) {
-		gnutls_assert();
-		goto cleanup;
+		tlshd_log_perror("hkdf_expand_label (iv)");
+		return ret;
 	}
-
-	info.data = str.data;
-	info.size = str.length;
-
-	ret = gnutls_hkdf_expand(mac, &key, &info, out->data);
-	if (ret < 0) {
-		gnutls_assert();
-		goto cleanup;
-	}
-
-	ret = 0;
-cleanup:
-	_gnutls_buffer_clear(&str);
-	return ret;
-}
-
-bool tlshd_update_traffic_keys(gnutls_datum_t *ap_key,
-			       gnutls_datum_t *ktls_key,
-			       gnutls_datum_t *ktls_iv)
-{
-	gnutls_mac_algorithm_t mac;
-
-	ret = _tls13_expand_secret(mac,
-				   "traffic upd", 11, NULL, 0,
-				   ap_key, ap_key->size, ap_key->data);
-	if (ret < 0)
-		return gnutls_assert_val(ret);
-
-	ret = _tls13_expand_secret(mac, "key", 3, NULL, 0,
-				   ap_key, ktls_key->size, ktls_key->data);
-	if (ret < 0)
-		return gnutls_assert_val(ret);
-
-	ret = _tls13_expand_secret(mac, "iv", 2, NULL, 0,
-				   ap_key, ktls_iv->size, ktls_iv->data);
-	if (ret < 0)
-		return gnutls_assert_val(ret);
+	return 0;
 }
 
 #ifdef HAVE_GNUTLS_TRANSPORT_IS_KTLS_ENABLED
@@ -172,6 +151,56 @@ static bool tlshd_is_ktls_enabled(__attribute__ ((unused)) gnutls_session_t sess
 	return false;
 }
 #endif
+
+static bool tlshd_getsockopt(int sock, unsigned read, void *info,
+			     socklen_t *infolen)
+{
+	int ret;
+
+	ret = getsockopt(sock, SOL_TLS, read ? TLS_RX : TLS_TX, info, infolen);
+	if (!ret)
+		return true;
+
+	tlshd_log_perror("getsockopt(TLS_ULP)");
+
+	switch (errno) {
+	case EBUSY:
+		tlshd_log_error("TLS not activated on the socket.");
+		break;
+	default:
+		tlshd_log_perror("getsockopt");
+	}
+	return false;
+}
+
+gnutls_mac_algorithm_t tlshd_get_crypto_mac(int sock, unsigned read)
+{
+	struct tls_crypto_info info;
+	socklen_t infolen = sizeof(info);
+	gnutls_mac_algorithm_t mac = GNUTLS_MAC_UNKNOWN;
+	int ret;
+
+	ret = tlshd_getsockopt(sock, read, &info, &infolen);
+	if (ret < 0 || infolen < sizeof(info))
+		return mac;
+	switch (info.cipher_type) {
+	case TLS_CIPHER_AES_GCM_128:
+		mac = GNUTLS_MAC_SHA256;
+		break;
+	case TLS_CIPHER_AES_GCM_256:
+		mac = GNUTLS_MAC_SHA384;
+		break;
+	case TLS_CIPHER_AES_CCM_128:
+		mac = GNUTLS_MAC_SHA256;
+		break;
+	case TLS_CIPHER_CHACHA20_POLY1305:
+		mac = GNUTLS_MAC_SHA256;
+		break;
+	default:
+		break;
+	}
+	return mac;
+}
 
 static bool tlshd_setsockopt(int sock, unsigned read, const void *info,
 			     socklen_t infolen)

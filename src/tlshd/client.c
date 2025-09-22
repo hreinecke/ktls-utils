@@ -743,6 +743,7 @@ void tlshd_quic_clienthello_handshake(struct tlshd_handshake_parms *parms)
 
 void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 {
+	gnutls_mac_algorithm_t mac = GNUTLS_MAC_UNKNOWN;
 	gnutls_datum_t ap_key, ktls_key, ktls_iv;
 	bool update_send = false, update_recv = false;
 	int ret;
@@ -772,28 +773,50 @@ void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 	}
 
 	if (update_send) {
+		mac = tlshd_get_crypto_mac(parms->sockfd, 0);
+		if (mac == GNUTLS_MAC_UNKNOWN) {
+			parms->session_status = EBUSY;
+			return;
+		}
+
 		if (!tlshd_keyring_get_ap_key(parms->keyring, 
 					      CLIENT_AP_WRITE_KEY,
 					      parms->session_id, &ap_key)) {
 			parms->session_status = ENOKEY;
 			return;
 		}
+
+		ret = tlshd_update_traffic_keys(mac, &ap_key, &ktls_key,
+						&ktls_iv);
+		if (ret < 0) {
+			parms->session_status = -ret;
+			return;
+		}
+#if 0
+		tlshd_ktls_set_iv(&ap_key, 0);
+#endif
 	}
 	if (update_recv) {
+		mac = tlshd_get_crypto_mac(parms->sockfd, 1);
+		if (mac == GNUTLS_MAC_UNKNOWN) {
+			parms->session_status = EBUSY;
+			return;
+		}
+
 		if (!tlshd_keyring_get_ap_key(parms->keyring,
 					      CLIENT_AP_READ_KEY,
 					      parms->session_id, &ap_key)) {
 			parms->session_status = ENOKEY;
 			return;
 		}
-	}
-
-	ret = tlshd_update_traffic_keys(&ap_key, &ktls_key, &ktls_iv);
-	parms->session_status = ret < 0 ? -ret : 0;
+		ret = tlshd_update_traffic_keys(mac, &ap_key, &ktls_key,
+						&ktls_iv);
+		if (ret < 0) {
+			parms->session_status = -ret;
+			return;
+		}
 #if 0
-	if (update_send)
-		tlshd_ktls_set_iv(&ap_key, 0);
-	if (update_recv)
 		tlshd_ktls_set_iv(&ap_key, 1);
 #endif
+	}
 }
