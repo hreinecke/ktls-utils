@@ -74,11 +74,12 @@ static char *tlshd_string_concat(char *str1, const char *str2)
 	return result;
 }
 
-int tlshd_update_traffic_keys(gnutls_mac_algorithm_t mac,
+int tlshd_update_traffic_keys(unsigned char cipher,
 			      gnutls_datum_t *ap_key,
 			      gnutls_datum_t *ktls_key,
 			      gnutls_datum_t *ktls_iv)
 {
+	gnutls_mac_algorithm_t mac = GNUTLS_MAC_UNKNOWN;
 	gnutls_datum_t upd_info = {
 		.data = (unsigned char *)"traffic upd",
 		.size = 11,
@@ -96,6 +97,24 @@ int tlshd_update_traffic_keys(gnutls_mac_algorithm_t mac,
 		.size = 0,
 	};
 	int ret;
+
+	switch (cipher) {
+	case TLS_CIPHER_AES_GCM_128:
+		mac = GNUTLS_MAC_SHA256;
+		break;
+	case TLS_CIPHER_AES_GCM_256:
+		mac = GNUTLS_MAC_SHA384;
+		break;
+	case TLS_CIPHER_AES_CCM_128:
+		mac = GNUTLS_MAC_SHA256;
+		break;
+	case TLS_CIPHER_CHACHA20_POLY1305:
+		mac = GNUTLS_MAC_SHA256;
+		break;
+	default:
+		tlshd_log_error("invalid cipher type %d", cipher);
+		return -EINVAL;
+	}
 
 	ret = gnutls_hkdf_expand_label(mac, ap_key, &upd_info,
 				       &context, ap_key->data,
@@ -173,33 +192,16 @@ static bool tlshd_getsockopt(int sock, unsigned read, void *info,
 	return false;
 }
 
-gnutls_mac_algorithm_t tlshd_get_crypto_mac(int sock, unsigned read)
+unsigned char tlshd_get_crypto_cipher(int sock, unsigned read)
 {
 	struct tls_crypto_info info;
 	socklen_t infolen = sizeof(info);
-	gnutls_mac_algorithm_t mac = GNUTLS_MAC_UNKNOWN;
 	int ret;
 
 	ret = tlshd_getsockopt(sock, read, &info, &infolen);
 	if (ret < 0 || infolen < sizeof(info))
-		return mac;
-	switch (info.cipher_type) {
-	case TLS_CIPHER_AES_GCM_128:
-		mac = GNUTLS_MAC_SHA256;
-		break;
-	case TLS_CIPHER_AES_GCM_256:
-		mac = GNUTLS_MAC_SHA384;
-		break;
-	case TLS_CIPHER_AES_CCM_128:
-		mac = GNUTLS_MAC_SHA256;
-		break;
-	case TLS_CIPHER_CHACHA20_POLY1305:
-		mac = GNUTLS_MAC_SHA256;
-		break;
-	default:
-		break;
-	}
-	return mac;
+		return 0;
+	return info.cipher_type;
 }
 
 static bool tlshd_setsockopt(int sock, unsigned read, const void *info,
@@ -264,6 +266,57 @@ static bool tlshd_set_aes_gcm128_info(gnutls_session_t session, int sock,
 
 	return tlshd_setsockopt(sock, read, &info, sizeof(info));
 }
+
+static bool tlshd_update_aes_gcm128_info(int sock, unsigned read,
+					 gnutls_datum_t *key,
+					 gnutls_datum_t *iv)
+{
+	struct tls12_crypto_info_aes_gcm_128 info = {
+		.info.version		= TLS_1_3_VERSION,
+		.info.cipher_type	= TLS_CIPHER_AES_GCM_128,
+	};
+	socklen_t infolen = sizeof(info);
+
+	if (!tlshd_getsockopt(sock, read, &info, &infolen)) {
+		tlshd_log_perror("getsockopt");
+		return false;
+	}
+
+	if (infolen <= sizeof(info)) {
+		tlshd_log_error("invalid info length %d\n", infolen);
+		errno = -EINVAL;
+		return false;
+	}
+
+	if (info.info.version != TLS_1_3_VERSION) {
+		tlshd_log_error("invalid TLS version %d\n",
+				info.info.version);
+		errno = -EOPNOTSUPP;
+		return false;
+	}
+
+	if (info.info.cipher_type != TLS_CIPHER_AES_GCM_128) {
+		tlshd_log_error("TLS cipher mismatch (%d is not 'aes-gcm128')",
+				info.info.cipher_type);
+		errno = -EPROTO;
+		return false;
+	}
+
+	memcpy(info.iv, iv->data + TLS_CIPHER_AES_GCM_128_SALT_SIZE,
+		       TLS_CIPHER_AES_GCM_128_IV_SIZE);
+	memcpy(info.salt, iv->data, TLS_CIPHER_AES_GCM_128_SALT_SIZE);
+	memcpy(info.key, key->data, TLS_CIPHER_AES_GCM_128_KEY_SIZE);
+	/*
+	 * RFC 8446 5.3 Per-record Nonce:
+	 * Each sequence number is set to zero at the beginning of a
+	 * connection and whenever the key is changed; the first record
+	 * transmitted under a particular traffic key MUST use sequence
+	 * number 0.
+	 */
+	memset(info.rec_seq, 0, TLS_CIPHER_AES_GCM_128_REC_SEQ_SIZE);
+
+	return tlshd_setsockopt(sock, read, &info, sizeof(info));
+}
 #endif
 
 #if defined(TLS_CIPHER_AES_GCM_256)
@@ -300,6 +353,57 @@ static bool tlshd_set_aes_gcm256_info(gnutls_session_t session, int sock,
 	memcpy(info.salt, iv.data, TLS_CIPHER_AES_GCM_256_SALT_SIZE);
 	memcpy(info.key, cipher_key.data, TLS_CIPHER_AES_GCM_256_KEY_SIZE);
 	memcpy(info.rec_seq, seq_number, TLS_CIPHER_AES_GCM_256_REC_SEQ_SIZE);
+
+	return tlshd_setsockopt(sock, read, &info, sizeof(info));
+}
+
+static bool tlshd_update_aes_gcm256_info(int sock, unsigned read,
+					 gnutls_datum_t *key,
+					 gnutls_datum_t *iv)
+{
+	struct tls12_crypto_info_aes_gcm_256 info = {
+		.info.version		= TLS_1_3_VERSION,
+		.info.cipher_type	= TLS_CIPHER_AES_GCM_256,
+	};
+	socklen_t infolen = sizeof(info);
+
+	if (!tlshd_getsockopt(sock, read, &info, &infolen)) {
+		tlshd_log_perror("getsockopt");
+		return false;
+	}
+
+	if (infolen <= sizeof(info)) {
+		tlshd_log_error("invalid info length %d\n", infolen);
+		errno = -EINVAL;
+		return false;
+	}
+
+	if (info.info.version != TLS_1_3_VERSION) {
+		tlshd_log_error("invalid TLS version %d\n",
+				info.info.version);
+		errno = -EOPNOTSUPP;
+		return false;
+	}
+
+	if (info.info.cipher_type != TLS_CIPHER_AES_GCM_256) {
+		tlshd_log_error("TLS cipher mismatch (%d is not 'aes-gcm256')",
+				info.info.cipher_type);
+		errno = -EPROTO;
+		return false;
+	}
+
+	memcpy(info.iv, iv->data + TLS_CIPHER_AES_GCM_256_SALT_SIZE,
+		       TLS_CIPHER_AES_GCM_256_IV_SIZE);
+	memcpy(info.salt, iv->data, TLS_CIPHER_AES_GCM_256_SALT_SIZE);
+	memcpy(info.key, key->data, TLS_CIPHER_AES_GCM_256_KEY_SIZE);
+	/*
+	 * RFC 8446 5.3 Per-record Nonce:
+	 * Each sequence number is set to zero at the beginning of a
+	 * connection and whenever the key is changed; the first record
+	 * transmitted under a particular traffic key MUST use sequence
+	 * number 0.
+	 */
+	memset(info.rec_seq, 0, TLS_CIPHER_AES_GCM_256_REC_SEQ_SIZE);
 
 	return tlshd_setsockopt(sock, read, &info, sizeof(info));
 }
@@ -342,6 +446,57 @@ static bool tlshd_set_aes_ccm128_info(gnutls_session_t session, int sock,
 
 	return tlshd_setsockopt(sock, read, &info, sizeof(info));
 }
+
+static bool tlshd_update_aes_ccm128_info(int sock, unsigned read,
+					 gnutls_datum_t *key,
+					 gnutls_datum_t *iv)
+{
+	struct tls12_crypto_info_aes_gcm_128 info = {
+		.info.version		= TLS_1_3_VERSION,
+		.info.cipher_type	= TLS_CIPHER_AES_CCM_128,
+	};
+	socklen_t infolen = sizeof(info);
+
+	if (!tlshd_getsockopt(sock, read, &info, &infolen)) {
+		tlshd_log_perror("getsockopt");
+		return false;
+	}
+
+	if (infolen <= sizeof(info)) {
+		tlshd_log_error("invalid info length %d\n", infolen);
+		errno = -EINVAL;
+		return false;
+	}
+
+	if (info.info.version != TLS_1_3_VERSION) {
+		tlshd_log_error("invalid TLS version %d\n",
+				info.info.version);
+		errno = -EOPNOTSUPP;
+		return false;
+	}
+
+	if (info.info.cipher_type != TLS_CIPHER_AES_CCM_128) {
+		tlshd_log_error("TLS cipher mismatch (%d is not 'aes-ccm128')",
+				info.info.cipher_type);
+		errno = -EPROTO;
+		return false;
+	}
+
+	memcpy(info.iv, iv->data + TLS_CIPHER_AES_CCM_128_SALT_SIZE,
+		       TLS_CIPHER_AES_CCM_128_IV_SIZE);
+	memcpy(info.salt, iv->data, TLS_CIPHER_AES_CCM_128_SALT_SIZE);
+	memcpy(info.key, key->data, TLS_CIPHER_AES_CCM_128_KEY_SIZE);
+	/*
+	 * RFC 8446 5.3 Per-record Nonce:
+	 * Each sequence number is set to zero at the beginning of a
+	 * connection and whenever the key is changed; the first record
+	 * transmitted under a particular traffic key MUST use sequence
+	 * number 0.
+	 */
+	memset(info.rec_seq, 0, TLS_CIPHER_AES_CCM_128_REC_SEQ_SIZE);
+
+	return tlshd_setsockopt(sock, read, &info, sizeof(info));
+}
 #endif
 
 #if defined(TLS_CIPHER_CHACHA20_POLY1305)
@@ -377,7 +532,87 @@ static bool tlshd_set_chacha20_poly1305_info(gnutls_session_t session, int sock,
 
 	return tlshd_setsockopt(sock, read, &info, sizeof(info));
 }
+
+static bool tlshd_update_chacha20_poly1305_info(int sock, unsigned read,
+					 gnutls_datum_t *key,
+					 gnutls_datum_t *iv)
+{
+	struct tls12_crypto_info_chacha20_poly1305 info = {
+		.info.version		= TLS_1_3_VERSION,
+		.info.cipher_type	= TLS_CIPHER_CHACHA20_POLY1305,
+	};
+	socklen_t infolen = sizeof(info);
+
+	if (!tlshd_getsockopt(sock, read, &info, &infolen)) {
+		tlshd_log_perror("getsockopt");
+		return false;
+	}
+
+	if (infolen <= sizeof(info)) {
+		tlshd_log_error("invalid info length %d\n", infolen);
+		errno = -EINVAL;
+		return false;
+	}
+
+	if (info.info.version != TLS_1_3_VERSION) {
+		tlshd_log_error("invalid TLS version %d\n",
+				info.info.version);
+		errno = -EOPNOTSUPP;
+		return false;
+	}
+
+	if (info.info.cipher_type != TLS_CIPHER_CHACHA20_POLY1305) {
+		tlshd_log_error("TLS cipher mismatch (%d is not 'chacha20-poly1305')",
+				info.info.cipher_type);
+		errno = -EPROTO;
+		return false;
+	}
+
+	memcpy(info.iv, iv->data, TLS_CIPHER_CHACHA20_POLY1305_IV_SIZE);
+	memcpy(info.key, key->data, TLS_CIPHER_CHACHA20_POLY1305_KEY_SIZE);
+	/*
+	 * RFC 8446 5.3 Per-record Nonce:
+	 * Each sequence number is set to zero at the beginning of a
+	 * connection and whenever the key is changed; the first record
+	 * transmitted under a particular traffic key MUST use sequence
+	 * number 0.
+	 */
+	memset(info.rec_seq, 0, TLS_CIPHER_CHACHA20_POLY1305_REC_SEQ_SIZE);
+
+	return tlshd_setsockopt(sock, read, &info, sizeof(info));
+}
 #endif
+
+/**
+ * tlshd_rekey_ktls - re-key an existing ktls connection
+ */
+bool tlshd_rekey_ktls(int sock, unsigned read, unsigned char cipher,
+		      gnutls_datum_t *key, gnutls_datum_t *iv)
+{
+	switch (cipher) {
+#if defined(TLS_CIPHER_AES_GCM_128)
+	case TLS_CIPHER_AES_GCM_128:
+		return tlshd_update_aes_gcm128_info(sock, read, key, iv);
+#endif
+#if defined(TLS_CIPHER_AES_GCM_256)
+	case TLS_CIPHER_AES_GCM_256:
+		return tlshd_update_aes_gcm256_info(sock, read, key, iv);
+#endif
+#if defined(TLS_CIPHER_AES_CCM_128)
+	case TLS_CIPHER_AES_CCM_128:
+		return tlshd_update_aes_ccm128_info(sock, read, key, iv);
+#endif
+#if defined(TLS_CIPHER_CHACHA20_POLY1305)
+	case TLS_CIPHER_CHACHA20_POLY1305:
+		return tlshd_update_chacha20_poly1305_info(sock, read, key, iv);
+#endif
+	default:
+		tlshd_log_error("Invalid cipher type %d\n", cipher);
+		break;
+	}
+	errno = -EINVAL;
+	return false;
+}
 
 /**
  * tlshd_initialize_ktls - Initialize socket for use by kTLS

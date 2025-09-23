@@ -743,7 +743,7 @@ void tlshd_quic_clienthello_handshake(struct tlshd_handshake_parms *parms)
 
 void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 {
-	gnutls_mac_algorithm_t mac = GNUTLS_MAC_UNKNOWN;
+	unsigned char cipher;
 	gnutls_datum_t ap_key, ktls_key, ktls_iv;
 	bool update_send = false, update_recv = false;
 	int ret;
@@ -773,32 +773,34 @@ void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 	}
 
 	if (update_send) {
-		mac = tlshd_get_crypto_mac(parms->sockfd, 0);
-		if (mac == GNUTLS_MAC_UNKNOWN) {
+		cipher = tlshd_get_crypto_cipher(parms->sockfd, 0);
+		if (!cipher) {
 			parms->session_status = EBUSY;
 			return;
 		}
 
-		if (!tlshd_keyring_get_ap_key(parms->keyring, 
+		if (!tlshd_keyring_get_ap_key(parms->keyring,
 					      CLIENT_AP_WRITE_KEY,
 					      parms->session_id, &ap_key)) {
 			parms->session_status = ENOKEY;
 			return;
 		}
 
-		ret = tlshd_update_traffic_keys(mac, &ap_key, &ktls_key,
+		ret = tlshd_update_traffic_keys(cipher, &ap_key, &ktls_key,
 						&ktls_iv);
 		if (ret < 0) {
 			parms->session_status = -ret;
 			return;
 		}
-#if 0
-		tlshd_ktls_set_iv(&ap_key, 0);
-#endif
+		if (tlshd_rekey_ktls(parms->sockfd, 0, cipher,
+				     &ktls_key, &ktls_iv)) {
+			parms->session_status = -errno;
+			return;
+		}
 	}
 	if (update_recv) {
-		mac = tlshd_get_crypto_mac(parms->sockfd, 1);
-		if (mac == GNUTLS_MAC_UNKNOWN) {
+		cipher = tlshd_get_crypto_cipher(parms->sockfd, 1);
+		if (!cipher) {
 			parms->session_status = EBUSY;
 			return;
 		}
@@ -809,14 +811,17 @@ void tlshd_tls13_client_keyupdate(struct tlshd_handshake_parms *parms)
 			parms->session_status = ENOKEY;
 			return;
 		}
-		ret = tlshd_update_traffic_keys(mac, &ap_key, &ktls_key,
+		ret = tlshd_update_traffic_keys(cipher, &ap_key, &ktls_key,
 						&ktls_iv);
 		if (ret < 0) {
 			parms->session_status = -ret;
 			return;
 		}
-#if 0
-		tlshd_ktls_set_iv(&ap_key, 1);
-#endif
+		if (tlshd_rekey_ktls(parms->sockfd, 1, cipher,
+				     &ktls_key, &ktls_iv)) {
+			parms->session_status = -errno;
+			return;
+		}
 	}
+	parms->session_status = 0;
 }
